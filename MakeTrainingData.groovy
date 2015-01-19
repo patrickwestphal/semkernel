@@ -1,11 +1,15 @@
-@GrabConfig(systemClassLoader=true)
-@Grab('net.sourceforge.owlapi:owlapi-api:4.0.0')
+import groovy.lang.GrabConfig
+import groovy.lang.Grab
+
+@Grapes([
+	@Grab(group='net.sourceforge.owlapi', module='owlapi-api', version='4.0.0'),
+	@Grab(group='net.sourceforge.owlapi', module='owlapi-apibinding', version='4.0.0'),
+	@Grab(group='org.semanticweb.elk', module='elk-owlapi', version='0.4.1')])
+
 import org.semanticweb.owlapi.io.* 
 import org.semanticweb.owlapi.model.*
-@Grab('net.sourceforge.owlapi:owlapi-apibinding:4.0.0')
 import org.semanticweb.owlapi.apibinding.OWLManager
 import org.semanticweb.owlapi.vocab.OWLRDFVocabulary
-@Grab('org.semanticweb.elk:elk-owlapi:0.4.1')
 import org.semanticweb.owlapi.reasoner.*
 import org.semanticweb.elk.owlapi.*
 
