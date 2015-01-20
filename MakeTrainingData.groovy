@@ -4,14 +4,31 @@ import groovy.lang.Grab
 @Grapes([
 	@Grab(group='net.sourceforge.owlapi', module='owlapi-api', version='4.0.0'),
 	@Grab(group='net.sourceforge.owlapi', module='owlapi-apibinding', version='4.0.0'),
-	@Grab(group='org.semanticweb.elk', module='elk-owlapi', version='0.4.1')])
+	@Grab(group='net.sourceforge.owlapi', module='owlapi-impl', version='4.0.0'),
+	@Grab(group='net.sourceforge.owlapi', module='owlapi-parsers', version='4.0.0'),
+	@Grab(group='log4j', module='log4j', version='1.2.17'),
+	@Grab(group='org.semanticweb.elk', module='elk-owlapi', version='0.4.1'),
+	@Grab(group='org.slf4j', module='slf4j-log4j12', version='1.7.10')
+])
 
-import org.semanticweb.owlapi.io.* 
-import org.semanticweb.owlapi.model.*
+import org.apache.log4j.Logger
+import org.apache.log4j.Level
+import org.semanticweb.elk.owlapi.ElkReasonerFactory
 import org.semanticweb.owlapi.apibinding.OWLManager
-import org.semanticweb.owlapi.vocab.OWLRDFVocabulary
-import org.semanticweb.owlapi.reasoner.*
-import org.semanticweb.elk.owlapi.*
+import org.semanticweb.owlapi.model.OWLDataFactory
+import org.semanticweb.owlapi.model.OWLOntology
+import org.semanticweb.owlapi.model.OWLOntologyManager
+import org.semanticweb.owlapi.model.IRI
+import org.semanticweb.owlapi.reasoner.ConsoleProgressMonitor
+import org.semanticweb.owlapi.reasoner.InferenceType
+import org.semanticweb.owlapi.reasoner.OWLReasoner
+import org.semanticweb.owlapi.reasoner.OWLReasonerConfiguration
+import org.semanticweb.owlapi.reasoner.OWLReasonerFactory
+import org.semanticweb.owlapi.reasoner.SimpleConfiguration
+
+/* ****************************************************************************
+ * set up cli argument paersing and logger
+ */
 
 def cli = new CliBuilder()
 cli.with {
@@ -36,7 +53,9 @@ if( opt.h ) {
 }
 
 def searchClass = opt.s
+
 def fout = new PrintWriter(new BufferedWriter(new FileWriter(opt.o)))
+
 Boolean flat = false
 if (opt.f) {
   flat=true
@@ -49,31 +68,46 @@ if (opt.r) {
 def classifierFor = new TreeSet()
 classifierFor.add(searchClass)
 
+Logger logger = Logger.getLogger('MakeTrainingData')
+logger.setLevel(Level.INFO)
+
+/* ****************************************************************************
+ * load ontology
+ */
+
+String mpFilePath = 'mp.obo'
+logger.info("Loading ontology file $mpFilePath ...")
 OWLOntologyManager manager = OWLManager.createOWLOntologyManager()
+OWLOntology ont = manager.loadOntologyFromOntologyDocument(new File(mpFilePath))
+logger.info('-Done-')
 
-OWLOntology ont = manager.loadOntologyFromOntologyDocument(new File("mp.obo"))
-
+logger.info('Building class hierarchy...')
 OWLDataFactory fac = manager.getOWLDataFactory()
-
-OWLReasonerFactory reasonerFactory = null
-
 ConsoleProgressMonitor progressMonitor = new ConsoleProgressMonitor()
 OWLReasonerConfiguration config = new SimpleConfiguration(progressMonitor)
 OWLReasonerFactory fac1 = new ElkReasonerFactory()
-OWLReasoner reasoner = fac1.createReasoner(ont)
+OWLReasoner reasoner = fac1.createReasoner(ont, config)
 
 reasoner.precomputeInferences(InferenceType.CLASS_HIERARCHY)
+logger.info('-Done-')
 
+/* ****************************************************************************
+ * set up class mappings and classes to use
+ */
+
+logger.info('Getting all subclasses of the search class...')
 def cl = fac.getOWLClass(IRI.create(searchClass))
 reasoner.getSubClasses(cl, false).getFlattened().each { sc ->
   classifierFor.add(sc.toString().replaceAll("<","").replaceAll(">",""))
 }
+logger.info('-Done-')
 
 def map = [:].withDefault { new TreeSet() }
 
-//def classes = ont.getClassesInSignature(true)
-
-new File("gene_association.mgi").splitEachLine("\t") { line ->
+// get the file here: ftp://ftp.informatics.jax.org/pub/reports/gene_association.mgi
+String geneAssociationFilePath = 'gene_association.mgi'
+logger.info("Reading MGI IDs from $geneAssociationFilePath ...")
+new File(geneAssociationFilePath).splitEachLine("\t") { line ->
   if (! line[0].startsWith("!")) {
     def gid = line[1]
     def got = line[4].replaceAll(":","_")
@@ -81,13 +115,15 @@ new File("gene_association.mgi").splitEachLine("\t") { line ->
     if (evidence != "ND") {
       got = "http://purl.obolibrary.org/obo/"+got
       map[gid].add(got)
-      //      classes.add(got)
     }
   }
 }
+logger.info('-Done-')
 
+String mousePhenotypesFilePath = 'mousephenotypes.txt'
+logger.info("Reading class mappings from $mousePhenotypesFilePath ...")
 def pmap = [:].withDefault { new LinkedHashSet() }
-new File("mousephenotypes.txt").splitEachLine("\t") { line ->
+new File(mousePhenotypesFilePath).splitEachLine("\t") { line ->
   def mgiid = line[0]
   if (mgiid in map.keySet()) {
     def pid = line[1]
@@ -98,14 +134,13 @@ new File("mousephenotypes.txt").splitEachLine("\t") { line ->
     }
   }
 }
+logger.info('-Done-')
 
-// header; OBSOLETE
-/*
-fout.print("map")
-classes.each { fout.print("\t$it") }
-fout.println ("")
-*/
+/* ****************************************************************************
+ * writing results to file
+ */
 
+logger.info('Building positives and negatives lists')
 List negatives = []
 List positives = []
 pmap.each { k, pset ->
@@ -123,9 +158,14 @@ pmap.each { k, pset ->
     negatives.add(s)
   }
 }
+logger.info('-Done-')
+
+logger.info("Writing results to file ($opt.o)...")
 positives.each { fout.println(it) }
 Collections.shuffle(negatives)
 def posSize = positives.size()
+
+// trim number of negative examples to fit the ratio specified in the cli args
 def cutoff = Math.round(ratio * posSize)
 
 if (cutoff > negatives.size()) {
@@ -140,5 +180,7 @@ if (ratio > 0) {
     fout.println(it)
   }
 }
+logger.info('-Done-')
+
 fout.flush()
 fout.close()
